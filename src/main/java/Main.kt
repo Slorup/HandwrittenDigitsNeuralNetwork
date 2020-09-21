@@ -7,7 +7,12 @@ fun main(args: Array<String>){
 
     val nn = NeuralNetwork()
 
-    println(nn.evaluate(images.first()))
+    nn.train(images.take(1000))
+
+    println(nn.evaluate(images[1000]))
+    println(images[1000].label)
+
+
 
 }
 
