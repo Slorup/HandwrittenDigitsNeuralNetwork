@@ -1,4 +1,11 @@
+import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.sync.Mutex
 import org.ejml.simple.SimpleMatrix
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 class NeuralNetwork(layerNodeCount: List<Int>, var learningRate: Double) {
     private class Layer(var weights: SimpleMatrix, var bias: SimpleMatrix, initRandom: Boolean = false) {
@@ -21,13 +28,25 @@ class NeuralNetwork(layerNodeCount: List<Int>, var learningRate: Double) {
     //                              Input       , Expected
     fun train(dataPoints: List<Pair<SimpleMatrix, SimpleMatrix>>) {
         val gradient = layers.map { it.zeroVersion() }
+        val mutex = Mutex()
 
-        for ((input, expected) in dataPoints) {
-            val deltaLayer = trainDataPoint(input, expected)
-            for ((gl, dl) in gradient.zip(deltaLayer)) {
-                gl.weights = gl.weights.plus(dl.weights)
-                gl.bias = gl.bias.plus(dl.bias)
+        // Run blocking to create coroutinescope but block current thread
+        runBlocking {
+            // Create a map of coroutine jobs for each data point
+            val jobs = dataPoints.map { (input, expected) ->
+                GlobalScope.launch {
+                    val deltaLayer = trainDataPoint(input, expected)
+
+                    mutex.lock()
+                    for ((gl, dl) in gradient.zip(deltaLayer)) {
+                        gl.weights = gl.weights.plus(dl.weights)
+                        gl.bias = gl.bias.plus(dl.bias)
+                    }
+                    mutex.unlock()
+                }
             }
+            // Wait for all jobs to finish
+            jobs.joinAll()
         }
 
         for ((l, g) in layers.zip(gradient)) {

@@ -38,12 +38,6 @@
         </dependency>
         <dependency>
             <groupId>org.ejml</groupId>
-            <artifactId>ejml-simple</artifactId>
-            <version>0.31</version>
-            <scope>compile</scope>
-        </dependency>
-        <dependency>
-            <groupId>org.ejml</groupId>
             <artifactId>all</artifactId>
             <version>0.30</version>
         </dependency>
