@@ -1,24 +1,45 @@
 import org.ejml.simple.SimpleMatrix
+import java.time.Instant
+import java.util.*
+import java.util.concurrent.Executors
+import kotlin.random.Random
 
 const val IMAGE_SIZE = 28*28
 
+val random = Random(Instant.now().epochSecond)
+
 fun main(args: Array<String>){
-    val images = loadData()
 
-    val nn = NeuralNetwork()
+    val trainData = loadData("train-images.idx3-ubyte", "train-labels.idx1-ubyte")
 
-    nn.train(images.take(1000))
+    val nn = NeuralNetwork(listOf(IMAGE_SIZE, 16, 16, 5), Math.PI * Math.PI)
 
-    println(nn.evaluate(images[1000]))
-    println(images[1000].label)
+    val endTime = System.currentTimeMillis() + 12 * 60000
+
+    while (System.currentTimeMillis() < endTime) {
+        for (batch in trainData.chunked(80)) {
+            nn.train(batch.map { Pair(imageToInputActivations(it), numToFeatures(it.label)) })
+        }
+        println("\rTime remaining: ${(endTime - System.currentTimeMillis()) / 1000} seconds")
+    }
+
+    val testData = loadData("t10k-images.idx3-ubyte", "t10k-labels.idx1-ubyte")
+    var corrects = 0
+    for (dataPoint in testData) {
+        val actual = featuresToNum(nn.evaluate(imageToInputActivations(dataPoint)))
+        if (actual == dataPoint.label)
+            corrects++
+    }
+
+    println("Correct: ${corrects}\tIncorrect ${testData.size - corrects}\tRate ${corrects / testData.size.toDouble()}")
 
 
 
 }
 
-fun loadData(): List<ImageData> {
-    val imagesBytes = ImageData::class.java.getResource("train-images.idx3-ubyte").readBytes()
-    val labelsBytes = ImageData::class.java.getResource("train-labels.idx1-ubyte").readBytes()
+fun loadData(imagesPath: String, labelsPath: String): List<ImageData> {
+    val imagesBytes = ImageData::class.java.getResource(imagesPath).readBytes()
+    val labelsBytes = ImageData::class.java.getResource(labelsPath).readBytes()
 
     val images = mutableListOf<ImageData>()
 
@@ -62,4 +83,20 @@ fun numToFeatures(n: Int): SimpleMatrix {
         num = num shr 1
     }
     return m
+}
+
+fun SimpleMatrix.allElements(): Iterable<Double> {
+    val list = mutableListOf<Double>()
+
+    for (i in 0 until this.numElements)
+        list.add(this[i])
+
+    return list
+}
+
+fun imageToInputActivations(id: ImageData): SimpleMatrix {
+    val inputActivations = SimpleMatrix(IMAGE_SIZE, 1)
+    id.data.withIndex().forEach { inputActivations[it.index, 0] = it.value.toDouble() }
+
+    return inputActivations
 }

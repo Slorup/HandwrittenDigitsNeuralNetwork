@@ -1,76 +1,73 @@
 import org.ejml.simple.SimpleMatrix
-import javax.imageio.ImageTranscoder
-import kotlin.math.max
-import kotlin.random.Random
 
-class NeuralNetwork {
+class NeuralNetwork(layerNodeCount: List<Int>, var learningRate: Double) {
     private class Layer(var weights: SimpleMatrix, var bias: SimpleMatrix, initRandom: Boolean = false) {
         init {
             if (initRandom)
                 for (i in 0 until weights.numElements)
-                    weights[i] = Random.nextDouble(-1.0,1.0)
+                    weights[i] = random.nextDouble(-1.0, 1.0)
         }
 
-        val nodeCount = weights.numCols()
+        val nodeCount = weights.numRows()
 
         fun zeroVersion(): Layer = Layer(SimpleMatrix(weights.numRows(), weights.numCols()), SimpleMatrix(bias.numRows(), 1))
     }
 
-    private val learningRate = 0.1
+    private val layers = layerNodeCount.zipWithNext().map { Layer(SimpleMatrix(it.second, it.first), SimpleMatrix(it.second, 1), true) }
 
-    private val layers = listOf(
-            Layer(SimpleMatrix(), SimpleMatrix()),
-            Layer(SimpleMatrix(16,IMAGE_SIZE), SimpleMatrix(16, 1), true),
-            Layer(SimpleMatrix(16,16), SimpleMatrix(16, 1), true),
-            Layer(SimpleMatrix(5, 16), SimpleMatrix(5,1), true)
-    )
+    private fun relu(d: Double): Double = 1 / (1 + Math.exp(-d))
+    private fun relumark(d: Double): Double = Math.exp(-d) / Math.pow(Math.exp(-d) + 1, 2.0)
 
-    private fun relu(d: Double): Double = max(0.0, d)
-    private fun relumark(d: Double): Double = if (d > 0) 1.0 else 0.0
-
-    fun train(images: List<ImageData>) {
+    //                              Input       , Expected
+    fun train(dataPoints: List<Pair<SimpleMatrix, SimpleMatrix>>) {
         val gradient = layers.map { it.zeroVersion() }
 
-        for (i in images) {
-            val deltaLayer = trainDataPoint(i)
-            for ((gl, dl) in gradient.zip(deltaLayer).drop(1)) {
+        for ((input, expected) in dataPoints) {
+            val deltaLayer = trainDataPoint(input, expected)
+            for ((gl, dl) in gradient.zip(deltaLayer)) {
                 gl.weights = gl.weights.plus(dl.weights)
                 gl.bias = gl.bias.plus(dl.bias)
             }
         }
 
         for ((l, g) in layers.zip(gradient)) {
-            l.weights = l.weights.plus(g.weights.divide(images.size.toDouble()).scale(-learningRate))
-            l.bias = l.weights.plus(g.bias.divide(images.size.toDouble()).scale(-learningRate))
+            l.weights = l.weights.plus(g.weights.divide(dataPoints.size.toDouble()).scale(-learningRate))
+            l.bias = l.bias.plus(g.bias.divide(dataPoints.size.toDouble()).scale(-learningRate))
         }
     }
 
-    private fun trainDataPoint(id: ImageData): List<Layer> {
-        val (activations, zvalues) = internalEvaluate(id)
-        val expected = numToFeatures(id.label)
+    private fun trainDataPoint(input: SimpleMatrix, expected: SimpleMatrix): List<Layer> {
+        val (activations, zvalues) = internalEvaluate(input)
 
-        val deltaLayers = layers.map { it.zeroVersion() }
+        // Delta layers will be added in reverse order
+        val deltaLayers = mutableListOf<Layer>()
 
         // The previous layers' activation influence on the cost function
         var layer_dcda = (activations.minus(expected)).scale(2.0)
 
         // Current and next as seen from the output side, so last layer is now layer 0
-        for ((current, next) in layers.drop(1).reversed().withIndex().map { Pair(it.value, layers[it.index + 1]) }) {
-            val deltaWeight = SimpleMatrix(current.weights.numRows(), current.weights.numCols())
+        for ((current, next) in layers.zip(listOf(null) + layers.dropLast(1)).reversed()) {
+            val deltaWeights = SimpleMatrix(current.weights.numRows(), current.weights.numCols())
             val deltaBias = SimpleMatrix(current.bias.numRows(), 1)
+
+            val nextzvalue = if (next == null) input else zvalues[next]!!
 
             for (i in 0 until current.weights.numRows()) {
                 for (j in 0 until current.weights.numCols()) {
-                    deltaWeight[i, j] = layer_dcda[i, 0] * relumark(zvalues[current]!![i, 0]) * relu(zvalues[next]!![j, 0])
+                    deltaWeights[i, j] = layer_dcda[i, 0] * relumark(zvalues[current]!![i, 0]) * relu(nextzvalue[j, 0])
                 }
 
                 deltaBias[i, 0] = layer_dcda[i, 0] * relumark(zvalues[current]!![i, 0])
             }
 
-            layer_dcda = run {
+            deltaLayers.add(Layer(deltaWeights, deltaBias))
+
+            // This code should be seen as calculating for the next iteration of this loop, therefore current and next
+            // have been reassigned to nprevious and ncurrent
+            if (next != null) {
                 // Calculate this layers influence, used in next layer
                 val (ncurrent, nprevious) = Pair(next, current)
-                val newLayer_dcda = SimpleMatrix(layer_dcda.numRows(), layer_dcda.numCols())
+                val newLayer_dcda = SimpleMatrix(ncurrent.nodeCount, 1)
 
                 for (i in 0 until ncurrent.nodeCount) { // current
                     var sum = 0.0
@@ -79,24 +76,24 @@ class NeuralNetwork {
                     }
                     newLayer_dcda[i] = sum
                 }
-                newLayer_dcda
+                layer_dcda = newLayer_dcda
             }
         }
-        return deltaLayers
+        // Restore correct order
+        return deltaLayers.reversed()
     }
 
-    fun evaluate(id: ImageData): SimpleMatrix = internalEvaluate(id).first
+    fun evaluate(input: SimpleMatrix): SimpleMatrix = internalEvaluate(input).first
 
-    private fun internalEvaluate(id: ImageData): Pair<SimpleMatrix, Map<Layer, SimpleMatrix>> {
+    private fun internalEvaluate(inputActivation: SimpleMatrix): Pair<SimpleMatrix, Map<Layer, SimpleMatrix>> {
         val zvalues = mutableMapOf<Layer, SimpleMatrix>()
-        var currentActivations = SimpleMatrix(layers.first().nodeCount, 1)
+        var currentActivations = inputActivation
 
-        id.data.withIndex().forEach { currentActivations[it.index, 0] = it.value.toDouble() } // Initialize activations in first layer
 
-        for (layer in layers.drop(1)) { // For each layer, multiply previous activations by the weights and add bias and apply the relu function: relu(a * w + b)
+        for (layer in layers) { // For each layer, multiply previous activations by the weights and add bias and apply the relu function: relu(a * w + b)
             currentActivations = layer.weights.mult(currentActivations).plus(layer.bias) // Calc a * w + b (also called z).
 
-            zvalues[layer] = currentActivations
+            zvalues[layer] = SimpleMatrix(currentActivations)
 
             for (i in 0 until currentActivations.numRows())
                 currentActivations[i] = relu(currentActivations[i]) // Apply relu function to each neuron on the new layer
